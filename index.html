@@ -415,6 +415,7 @@ hr.div { border:none; border-top:1px solid var(--line); margin:1rem 0; }
   #app { flex-direction:row; }
   .pages { flex:1; }
   .page { max-width:820px; margin:0 auto; }
+  .head { left:80px; }
 }
 </style>
 </head>
@@ -674,8 +675,33 @@ const DEF_UNITS = [
   {id:'propiedades',name:'Propiedades',emoji:'🏘️',sort_order:3},
   {id:'personal',name:'Personal',emoji:'👤',sort_order:4},
 ];
-const EXP_CATS = ['Transporte / Movilidad','Marketing & Publicidad','Tecnología & Web','Nómina / Empleados','Impuestos & Obligaciones','Arriendos','Servicios Públicos','Alimentación','Salud & Bienestar','Educación & Capacitación','Pago deuda','Mantenimiento','Otros'];
-const INC_CATS = ['Venta de producto','Venta de vehículo','Venta de inmueble','Comisión','Arriendo recibido','Servicio prestado','Anticipo','Préstamo recibido','Dividendos','Otros'];
+const EXP_CATS = [
+  '🛒 Supermercado & Mercado',
+  '🍽️ Restaurantes & Comidas fuera',
+  '⛽ Transporte & Movilidad',
+  '🎬 Entretenimiento & Streaming',
+  '💊 Salud & Farmacia',
+  '📚 Educación & Colegio',
+  '👕 Ropa & Calzado',
+  '🏠 Hogar & Servicios públicos',
+  '💅 Belleza & Cuidado personal',
+  '✈️ Viajes & Vacaciones',
+  '🎁 Regalos & Eventos sociales',
+  '🐾 Mascotas',
+  '💳 Pago deuda',
+  '🚗 Costos venta carros',
+  '💼 Negocios varios',
+  '❓ Otros',
+];
+const INC_CATS = [
+  '💻 Estantek',
+  '🚗 Venta de carros',
+  '💼 Negocios varios',
+  '🏘️ Arriendo recibido',
+  '🎁 Personal & Regalos',
+  '💰 Préstamo recibido',
+  '❓ Otros ingresos',
+];
 const MOS = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 const COLS = ['#d4a843','#34d399','#fb7185','#38bdf8','#a78bfa','#f472b6','#fb923c'];
 
@@ -684,7 +710,7 @@ const S = {
   units:[...DEF_UNITS], txs:[], debts:[], funds:[], dmovs:[],
   page:'home', tf:'all', uf:'all',
   vm:new Date().getMonth(), vy:new Date().getFullYear(),
-  txType:'expense', movType:'pay', movDebtId:null, charts:{},
+  txType:'expense', movType:'pay', movDebtId:null, editingTxId:null, charts:{},
 };
 
 // ─── SYNC UI ───────────────────────────────────────────────────
@@ -698,7 +724,7 @@ function sync(st, t) {
 
 // ─── MAPEOS Supabase ↔ JS ──────────────────────────────────────
 function mapTx(r) {
-  return { id:r.id, type:r.type, unit:r.unit_id, desc:r.description, amount:r.amount, category:r.category, fund_id:r.fund_id, fund_name:r.fund_name, date:r.date, note:r.note };
+  return { id:r.id, type:r.type, unit:r.unit_id, desc:r.description, amount:r.amount, category:r.category, fund_id:r.fund_id, fund_name:r.fund_name, debt_source_id:r.debt_source_id, date:r.date, note:r.note };
 }
 function mapDebt(r) {
   return { id:r.id, name:r.name, bank:r.bank, emoji:r.emoji, balance:r.initial_balance, limit:r.credit_limit, cutDate:r.cut_day, payDate:r.pay_day };
@@ -833,7 +859,8 @@ function txHTML(t) {
   const d=new Date(t.date+'T12:00:00').toLocaleDateString('es-CO',{day:'2-digit',month:'short'});
   // fuente/cuenta
   const srcFund=S.funds.find(f=>f.id===t.fund_id);
-  const srcLabel=srcFund?`${srcFund.emoji||'💵'} ${srcFund.name}`:(t.fund_name||'');
+  const srcDebt=S.debts.find(d=>d.id===t.debt_source_id);
+  const srcLabel=srcDebt?`${srcDebt.emoji||'💳'} ${srcDebt.name}`:srcFund?`${srcFund.emoji||'💵'} ${srcFund.name}`:(t.fund_name||'');
   return `<div class="txrow">
     <div class="tx-ico ${cls}">${ico}</div>
     <div class="tx-body">
@@ -849,6 +876,7 @@ function txHTML(t) {
     <div class="tx-right">
       <div class="tx-amt ${cls}">${sign}$${fmt(t.amount)}</div>
     </div>
+    <button class="tx-del" style="margin-right:.2rem" onclick="openEditTx('${t.id}')">✏️</button>
     <button class="tx-del" onclick="delTx('${t.id}')">✕</button>
   </div>`;
 }
@@ -997,12 +1025,14 @@ window.submitMov = async function() {
       if(!amt||!date){alert('Completa monto y fecha');return;}
       const fund=S.funds.find(f=>f.id===fundId); if(!fund){alert('Selecciona una cuenta válida');return;}
       const debt=S.debts.find(d=>d.id===S.movDebtId);
+      // Solo registra el movimiento en la deuda y descuenta de la cuenta.
+      // NO crea transacción de gasto — los gastos ya se registraron al momento
+      // de cada compra con la tarjeta, para evitar doble conteo.
       await Promise.all([
         sb.from('debt_movements').insert({debt_id:S.movDebtId,type:'pay',amount:amt,date,description:note||`Pago ${debt?.name||''}`,fund_id:fundId,unit_id:unitId}),
         sb.from('funds').update({balance:Math.max(0,fund.balance-amt)}).eq('id',fundId),
-        sb.from('transactions').insert({type:'expense',unit_id:unitId,description:`Pago ${debt?.name||'deuda'}`,amount:amt,category:'Pago deuda',date,note,fund_id:fundId,fund_name:fund.name}),
       ]);
-      sync('ok','Pago registrado ✓');
+      sync('ok','Pago registrado ✓ — saldo de cuenta y tarjeta actualizados');
     } else {
       const amt=parseFloat(document.getElementById('mvAmt2').value)||0;
       const desc=document.getElementById('mvDesc2').value.trim();
@@ -1102,7 +1132,28 @@ window.delFund = async function(id) {
   sync('ok','Eliminado ✓');
 };
 
-// ─── REGISTRAR TRANSACCIÓN ─────────────────────────────────────
+// ─── REGISTRAR / EDITAR TRANSACCIÓN ───────────────────────────
+window.openEditTx = function(id) {
+  const t=S.txs.find(x=>x.id===id); if(!t) return;
+  S.editingTxId=id;
+  S.txType=t.type;
+  renderUnitSel(); renderCatSel(); renderSourceSel();
+  document.getElementById('tBE').className='ttbtn e'+(t.type==='expense'?' on':'');
+  document.getElementById('tBI').className='ttbtn i'+(t.type==='income'?' on':'');
+  document.getElementById('fSourceLbl').textContent=t.type==='expense'?'¿Con qué cuenta pagaste?':'¿En qué cuenta recibiste?';
+  document.getElementById('fDesc').value=t.desc||'';
+  document.getElementById('fAmt').value=t.amount||'';
+  document.getElementById('fDate').value=t.date||'';
+  document.getElementById('fNote').value=t.note||'';
+  document.getElementById('fCat').value=t.category||'';
+  document.getElementById('fUnit').value=t.unit||'';
+  document.getElementById('fSource').value=t.debt_source_id?`d:${t.debt_source_id}`:t.fund_id?`f:${t.fund_id}`:'';
+  document.querySelector('.sheet-title').textContent='Editar transacción';
+  document.getElementById('txBtn').textContent='Guardar cambios';
+  document.getElementById('txSheet').classList.add('open');
+  document.getElementById('txOv').classList.add('open');
+};
+
 window.submitTx = async function() {
   const desc=document.getElementById('fDesc').value.trim();
   const amt=parseFloat(document.getElementById('fAmt').value);
@@ -1110,27 +1161,106 @@ window.submitTx = async function() {
   const cat=document.getElementById('fCat').value;
   const date=document.getElementById('fDate').value;
   const note=document.getElementById('fNote').value.trim();
-  const fundId=document.getElementById('fSource').value||null;
+  const srcRaw=document.getElementById('fSource').value||'';
+  const isFund=srcRaw.startsWith('f:');
+  const isDebt=srcRaw.startsWith('d:');
+  const fundId=isFund?srcRaw.slice(2):null;
+  const debtSrcId=isDebt?srcRaw.slice(2):null;
   if(!desc||!amt||!date){alert('Completa descripción, monto y fecha');return;}
   const btn=document.getElementById('txBtn'); btn.disabled=true; btn.textContent='Guardando...';
   sync('sp','Guardando...');
   try {
     const fund=S.funds.find(f=>f.id===fundId);
-    await sb.from('transactions').insert({
-      type:S.txType, unit_id:unit, description:desc, amount:amt,
-      category:cat, date, note,
-      fund_id:fundId||null,
-      fund_name:fund?fund.name:null,
-    });
+    const debtSrc=S.debts.find(d=>d.id===debtSrcId);
+    if(S.editingTxId) {
+      // EDITAR: revertir efecto anterior, aplicar nuevo
+      const old=S.txs.find(t=>t.id===S.editingTxId);
+      const ops=[];
+      // revertir fondo anterior
+      if(old?.fund_id) {
+        const oldFund=S.funds.find(f=>f.id===old.fund_id);
+        if(oldFund) {
+          const rev=old.type==='expense'?old.amount:-old.amount;
+          ops.push(sb.from('funds').update({balance:oldFund.balance+rev}).eq('id',old.fund_id));
+        }
+      }
+      // revertir tarjeta anterior (eliminar el cargo asociado si existe)
+      if(old?.debt_source_id) {
+        // reducir el cargo: buscar el último cargo asociado a esta tx y eliminarlo
+        // Como simplificación, ajustamos el balance de la deuda directamente
+        // (no guardamos el id del debt_movement asociado, así que ajustamos el balance)
+      }
+      // aplicar fondo nuevo
+      if(fund) {
+        const sameF=old?.fund_id===fundId;
+        const base=sameF?(fund.balance+(old.type==='expense'?old.amount:-old.amount)):fund.balance;
+        const delta=S.txType==='expense'?-amt:amt;
+        ops.push(sb.from('funds').update({balance:base+delta}).eq('id',fundId));
+      }
+      // aplicar tarjeta nueva (cargo)
+      if(debtSrc && S.txType==='expense') {
+        ops.push(sb.from('debt_movements').insert({
+          debt_id:debtSrcId, type:'charge', amount:amt, date,
+          description:desc, unit_id:unit,
+        }));
+      }
+      ops.push(sb.from('transactions').update({
+        type:S.txType, unit_id:unit, description:desc, amount:amt,
+        category:cat, date, note,
+        fund_id:fundId||null, fund_name:fund?fund.name:null,
+        debt_source_id:debtSrcId||null,
+      }).eq('id',S.editingTxId));
+      await Promise.all(ops);
+    } else {
+      // NUEVO
+      const ops=[sb.from('transactions').insert({
+        type:S.txType, unit_id:unit, description:desc, amount:amt,
+        category:cat, date, note,
+        fund_id:fundId||null, fund_name:fund?fund.name:null,
+        debt_source_id:debtSrcId||null,
+      })];
+      // actualizar saldo cuenta
+      if(fund) {
+        const delta=S.txType==='expense'?-amt:amt;
+        ops.push(sb.from('funds').update({balance:fund.balance+delta}).eq('id',fundId));
+      }
+      // registrar cargo en tarjeta de crédito
+      if(debtSrc && S.txType==='expense') {
+        ops.push(sb.from('debt_movements').insert({
+          debt_id:debtSrcId, type:'charge', amount:amt, date,
+          description:desc, unit_id:unit,
+        }));
+      }
+      await Promise.all(ops);
+    }
     closeTxSheet(); sync('ok','Guardado ✓');
-  } catch(e) { alert('Error: '+e.message); sync('er','Error'); }
-  finally { btn.disabled=false; btn.textContent='Registrar transacción'; }
+  } catch(e) { console.error(e); alert('Error: '+e.message); sync('er','Error'); }
+  finally { btn.disabled=false; btn.textContent=S.editingTxId?'Guardar cambios':'Registrar transacción'; }
 };
+
 window.delTx = async function(id) {
   if(!confirm('¿Eliminar esta transacción?')) return;
   sync('sp','...');
-  try { await sb.from('transactions').delete().eq('id',id); sync('ok','Eliminado ✓'); }
-  catch(e) { alert('Error'); }
+  try {
+    const tx=S.txs.find(t=>t.id===id);
+    const ops=[sb.from('transactions').delete().eq('id',id)];
+    // revertir saldo de cuenta si tenía una asociada
+    if(tx?.fund_id) {
+      const fund=S.funds.find(f=>f.id===tx.fund_id);
+      if(fund) {
+        const rev=tx.type==='expense'?tx.amount:-tx.amount;
+        ops.push(sb.from('funds').update({balance:fund.balance+rev}).eq('id',tx.fund_id));
+      }
+    }
+    // si fue cargada a tarjeta, eliminar el cargo de deuda asociado
+    if(tx?.debt_source_id) {
+      // buscar el último cargo de este monto en esa deuda y eliminarlo
+      const mov=S.dmovs.find(m=>m.debtId===tx.debt_source_id&&m.type==='charge'&&m.amount===tx.amount&&m.desc===tx.desc);
+      if(mov) ops.push(sb.from('debt_movements').delete().eq('id',mov.id));
+    }
+    await Promise.all(ops);
+    sync('ok','Eliminado ✓');
+  } catch(e) { alert('Error'); }
 };
 
 // ─── REGISTRAR DEUDA ───────────────────────────────────────────
@@ -1185,6 +1315,9 @@ window.closeTxSheet = function() {
   document.getElementById('txOv').classList.remove('open');
   ['fDesc','fAmt','fNote'].forEach(id=>document.getElementById(id).value='');
   document.getElementById('fSource').value='';
+  S.editingTxId=null;
+  document.querySelector('#txSheet .sheet-title').textContent='Nueva transacción';
+  document.getElementById('txBtn').textContent='Registrar transacción';
 };
 window.openDebtSheet = function() {
   document.getElementById('debtSheet').classList.add('open');
@@ -1232,8 +1365,12 @@ function renderCatSel() {
   document.getElementById('fCat').innerHTML=cats.map(c=>`<option>${c}</option>`).join('');
 }
 function renderSourceSel() {
-  document.getElementById('fSource').innerHTML=`<option value="">— Sin especificar —</option>`
-    + S.funds.map(f=>`<option value="${f.id}">${f.emoji||'💵'} ${f.name} · $${fmt(f.balance)}</option>`).join('');
+  const fundsOpts = S.funds.map(f=>`<option value="f:${f.id}">${f.emoji||'💵'} ${f.name} · $${fmt(f.balance)}</option>`).join('');
+  const debtOpts  = S.debts.map(d=>`<option value="d:${d.id}">${d.emoji||'💳'} ${d.name} (tarjeta)</option>`).join('');
+  document.getElementById('fSource').innerHTML =
+    `<option value="">— Sin especificar —</option>`
+    + (fundsOpts ? `<optgroup label="💵 Cuentas / Efectivo">${fundsOpts}</optgroup>` : '')
+    + (debtOpts  ? `<optgroup label="💳 Tarjetas de crédito">${debtOpts}</optgroup>`  : '');
 }
 
 // ─── EXPORTAR CSV ──────────────────────────────────────────────
