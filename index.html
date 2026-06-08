@@ -1172,66 +1172,55 @@ window.submitTx = async function() {
   try {
     const fund=S.funds.find(f=>f.id===fundId);
     const debtSrc=S.debts.find(d=>d.id===debtSrcId);
+    const txData = {
+      type:S.txType, unit_id:unit, description:desc, amount:amt,
+      category:cat, date, note:note||null,
+      fund_id:fundId||null, fund_name:fund?fund.name:null,
+      debt_source_id:debtSrcId||null,
+    };
+
     if(S.editingTxId) {
       // EDITAR: revertir efecto anterior, aplicar nuevo
       const old=S.txs.find(t=>t.id===S.editingTxId);
-      const ops=[];
       // revertir fondo anterior
       if(old?.fund_id) {
         const oldFund=S.funds.find(f=>f.id===old.fund_id);
         if(oldFund) {
           const rev=old.type==='expense'?old.amount:-old.amount;
-          ops.push(sb.from('funds').update({balance:oldFund.balance+rev}).eq('id',old.fund_id));
+          const {error:e1}=await sb.from('funds').update({balance:oldFund.balance+rev}).eq('id',old.fund_id);
+          if(e1) throw new Error(e1.message);
         }
-      }
-      // revertir tarjeta anterior (eliminar el cargo asociado si existe)
-      if(old?.debt_source_id) {
-        // reducir el cargo: buscar el último cargo asociado a esta tx y eliminarlo
-        // Como simplificación, ajustamos el balance de la deuda directamente
-        // (no guardamos el id del debt_movement asociado, así que ajustamos el balance)
       }
       // aplicar fondo nuevo
       if(fund) {
         const sameF=old?.fund_id===fundId;
         const base=sameF?(fund.balance+(old.type==='expense'?old.amount:-old.amount)):fund.balance;
         const delta=S.txType==='expense'?-amt:amt;
-        ops.push(sb.from('funds').update({balance:base+delta}).eq('id',fundId));
+        const {error:e2}=await sb.from('funds').update({balance:base+delta}).eq('id',fundId);
+        if(e2) throw new Error(e2.message);
       }
-      // aplicar tarjeta nueva (cargo)
+      // aplicar cargo en tarjeta nueva
       if(debtSrc && S.txType==='expense') {
-        ops.push(sb.from('debt_movements').insert({
-          debt_id:debtSrcId, type:'charge', amount:amt, date,
-          description:desc, unit_id:unit,
-        }));
+        const {error:e3}=await sb.from('debt_movements').insert({debt_id:debtSrcId,type:'charge',amount:amt,date,description:desc,unit_id:unit});
+        if(e3) throw new Error(e3.message);
       }
-      ops.push(sb.from('transactions').update({
-        type:S.txType, unit_id:unit, description:desc, amount:amt,
-        category:cat, date, note,
-        fund_id:fundId||null, fund_name:fund?fund.name:null,
-        debt_source_id:debtSrcId||null,
-      }).eq('id',S.editingTxId));
-      await Promise.all(ops);
+      const {error:e4}=await sb.from('transactions').update(txData).eq('id',S.editingTxId);
+      if(e4) throw new Error(e4.message);
     } else {
       // NUEVO
-      const ops=[sb.from('transactions').insert({
-        type:S.txType, unit_id:unit, description:desc, amount:amt,
-        category:cat, date, note,
-        fund_id:fundId||null, fund_name:fund?fund.name:null,
-        debt_source_id:debtSrcId||null,
-      })];
+      const {error:e1}=await sb.from('transactions').insert(txData);
+      if(e1) throw new Error('Error guardando transacción: '+e1.message);
       // actualizar saldo cuenta
       if(fund) {
         const delta=S.txType==='expense'?-amt:amt;
-        ops.push(sb.from('funds').update({balance:fund.balance+delta}).eq('id',fundId));
+        const {error:e2}=await sb.from('funds').update({balance:fund.balance+delta}).eq('id',fundId);
+        if(e2) throw new Error('Error actualizando cuenta: '+e2.message);
       }
       // registrar cargo en tarjeta de crédito
       if(debtSrc && S.txType==='expense') {
-        ops.push(sb.from('debt_movements').insert({
-          debt_id:debtSrcId, type:'charge', amount:amt, date,
-          description:desc, unit_id:unit,
-        }));
+        const {error:e3}=await sb.from('debt_movements').insert({debt_id:debtSrcId,type:'charge',amount:amt,date,description:desc,unit_id:unit});
+        if(e3) throw new Error('Error registrando cargo tarjeta: '+e3.message);
       }
-      await Promise.all(ops);
     }
     closeTxSheet(); sync('ok','Guardado ✓');
   } catch(e) { console.error(e); alert('Error: '+e.message); sync('er','Error'); }
